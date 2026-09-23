@@ -43,6 +43,7 @@ async def require_api_key(
     cfg = get_settings()
 
     if not cfg.auth_required:
+        # Explicit local opt-out only (REQUIRE_AUTH=0 and non-production)
         provided = _extract_api_key(authorization, x_api_key)
         return provided or "anonymous-dev"
 
@@ -62,5 +63,6 @@ async def require_api_key(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # Stash for rate limiter without logging the key
     request.state.api_key_id = "primary"
     return "primary"
