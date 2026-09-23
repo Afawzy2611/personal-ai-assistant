@@ -1,1 +1,67 @@
-from typing import Optional, Dict, Any\nfrom loguru import logger\nimport requests\nfrom bs4 import BeautifulSoup\nfrom config import settings\n\nclass NumSpyService:\n    \"\"\"\n    Service for SMS operations and mobile number details using Way2sms API.\n    Features: Send SMS, Schedule SMS, Get Mobile Number Details\n    \"\"\"\n    \n    def __init__(self):\n        self.base_url = \"http://www.way2sms.com\"\n        self.session = requests.Session()\n        self.session.headers.update({\n            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'\n        })\n        logger.info(\"NumSpy Service initialized\")\n    \n    async def login(self, username: str, password: str) -> bool:\n        \"\"\"\n        Authenticate with Way2sms account.\n        \"\"\"\n        try:\n            logger.info(f\"Attempting login for {username}\")\n            \n            login_url = f\"{self.base_url}/auth-login\"\n            payload = {\n                'username': username,\n                'password': password,\n                'button': 'Login'\n            }\n            \n            response = self.session.post(login_url, data=payload)\n            \n            if response.status_code == 200 and 'logout' in response.text:\n                logger.info(f\"Successfully logged in as {username}\")\n                return True\n            else:\n                logger.error(\"Login failed - invalid credentials\")\n                return False\n        except Exception as e:\n            logger.error(f\"Login error: {str(e)}\")\n            raise\n    \n    async def send_sms(self, mobile_number: str, message: str, username: str = None, password: str = None) -> Dict[str, Any]:\n        \"\"\"\n        Send SMS to a mobile number.\n        \"\"\"\n        try:\n            # Login if credentials provided\n            if username and password:\n                await self.login(username, password)\n            \n            logger.info(f\"Sending SMS to {mobile_number}\")\n            \n            sms_url = f\"{self.base_url}/quicksms\"\n            payload = {\n                'custid': '',\n                'message': message,\n                'mobileno': mobile_number,\n                'Forward': 'Send SMS'\n            }\n            \n            response = self.session.post(sms_url, data=payload)\n            \n            if response.status_code == 200:\n                logger.info(f\"SMS sent successfully to {mobile_number}\")\n                return {\n                    \"status\": \"success\",\n                    \"message\": \"SMS sent successfully\",\n                    \"recipient\": mobile_number,\n                    \"sms_text\": message[:50] + \"...\" if len(message) > 50 else message\n                }\n            else:\n                logger.error(f\"Failed to send SMS to {mobile_number}\")\n                return {\n                    \"status\": \"error\",\n                    \"message\": \"Failed to send SMS\",\n                    \"error_code\": response.status_code\n                }\n        except Exception as e:\n            logger.error(f\"SMS send error: {str(e)}\")\n            return {\n                \"status\": \"error\",\n                \"message\": str(e)\n            }\n    \n    async def schedule_sms(\n        self,\n        mobile_number: str,\n        message: str,\n        date: str,  # DD/MM/YYYY\n        time: str,  # HH:mm (24h format)\n        username: str = None,\n        password: str = None\n    ) -> Dict[str, Any]:\n        \"\"\"\n        Schedule SMS to be sent at a later time.\n        Date format: DD/MM/YYYY\n        Time format: HH:mm (24-hour)\n        \"\"\"\n        try:\n            if username and password:\n                await self.login(username, password)\n            \n            logger.info(f\"Scheduling SMS to {mobile_number} for {date} at {time}\")\n            \n            schedule_url = f\"{self.base_url}/sms/send\"\n            payload = {\n                'message': message,\n                'mobileno': mobile_number,\n                'sendDate': date,\n                'sendTime': time,\n                'SendSMS': 'Schedule SMS'\n            }\n            \n            response = self.session.post(schedule_url, data=payload)\n            \n            if response.status_code == 200:\n                logger.info(f\"SMS scheduled for {mobile_number}\")\n                return {\n                    \"status\": \"success\",\n                    \"message\": \"SMS scheduled successfully\",\n                    \"recipient\": mobile_number,\n                    \"scheduled_date\": date,\n                    \"scheduled_time\": time\n                }\n            else:\n                logger.error(f\"Failed to schedule SMS\")\n                return {\n                    \"status\": \"error\",\n                    \"message\": \"Failed to schedule SMS\",\n                    \"error_code\": response.status_code\n                }\n        except Exception as e:\n            logger.error(f\"SMS schedule error: {str(e)}\")\n            return {\n                \"status\": \"error\",\n                \"message\": str(e)\n            }\n    \n    async def get_mobile_details(self, mobile_number: str) -> Dict[str, Any]:\n        \"\"\"\n        Get details of a mobile number (country, operator, etc).\n        Works without Way2sms authentication.\n        \"\"\"\n        try:\n            logger.info(f\"Fetching details for mobile number {mobile_number}\")\n            \n            # Clean mobile number\n            mobile_number = str(mobile_number).strip()\n            \n            # Use Way2sms API to get number details\n            details_url = f\"{self.base_url}/smstodebug\"\n            params = {'mobile': mobile_number}\n            \n            response = self.session.get(details_url, params=params, timeout=10)\n            \n            if response.status_code == 200:\n                soup = BeautifulSoup(response.content, 'html.parser')\n                \n                # Parse details from response\n                details = {\n                    \"mobile_number\": mobile_number,\n                    \"status\": \"found\",\n                    \"operator\": None,\n                    \"country\": None,\n                    \"details\": {}\n                }\n                \n                # Extract operator and country information\n                result_text = soup.get_text()\n                \n                if 'operator' in result_text.lower():\n                    details[\"operator\"] = self._extract_operator(result_text)\n                if 'india' in result_text.lower() or 'in' in result_text.lower():\n                    details[\"country\"] = \"India\"\n                \n                logger.info(f\"Details retrieved for {mobile_number}\")\n                return details\n            else:\n                logger.warning(f\"Unable to fetch details for {mobile_number}\")\n                return {\n                    \"mobile_number\": mobile_number,\n                    \"status\": \"not_found\",\n                    \"error\": \"Could not retrieve details for this number\"\n                }\n        except Exception as e:\n            logger.error(f\"Mobile details error: {str(e)}\")\n            return {\n                \"status\": \"error\",\n                \"message\": str(e)\n            }\n    \n    def _extract_operator(self, text: str) -> Optional[str]:\n        \"\"\"\n        Extract operator name from response text.\n        \"\"\"\n        operators = [\n            \"airtel\", \"vodafone\", \"jio\", \"bsnl\", \"idea\", \"mts\", \"uninor\",\n            \"reliance\", \"docomo\", \"tata\", \"loop\", \"virgin\"\n        ]\n        \n        text_lower = text.lower()\n        for operator in operators:\n            if operator in text_lower:\n                return operator.upper()\n        return None\n    \n    async def logout(self) -> bool:\n        \"\"\"\n        Logout from Way2sms account.\n        \"\"\"\n        try:\n            logger.info(\"Logging out from Way2sms\")\n            logout_url = f\"{self.base_url}/auth-logout\"\n            response = self.session.get(logout_url)\n            \n            if response.status_code == 200:\n                logger.info(\"Successfully logged out\")\n                self.session.close()\n                return True\n            return False\n        except Exception as e:\n            logger.error(f\"Logout error: {str(e)}\")\n            return False\n    \n    async def validate_phone_number(self, phone_number: str) -> Dict[str, Any]:\n        \"\"\"\n        Validate phone number format.\n        \"\"\"\n        try:\n            phone = str(phone_number).strip()\n            \n            # Basic validation\n            if not phone.isdigit():\n                return {\"valid\": False, \"reason\": \"Contains non-numeric characters\"}\n            \n            if len(phone) < 10:\n                return {\"valid\": False, \"reason\": \"Phone number too short\"}\n            \n            if len(phone) > 13:\n                return {\"valid\": False, \"reason\": \"Phone number too long\"}\n            \n            logger.info(f\"Phone number {phone} validated successfully\")\n            return {\n                \"valid\": True,\n                \"phone_number\": phone,\n                \"length\": len(phone),\n                \"country_code\": phone[:2] if len(phone) > 2 else \"Unknown\"\n            }\n        except Exception as e:\n            logger.error(f\"Validation error: {str(e)}\")\n            return {\"valid\": False, \"reason\": str(e)}\n"
+"""SMS domain helpers (validation + provider orchestration).
+
+Rewritten as a real Python module (prior revision was a single-line escaped blob).
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from typing import Any, Dict, Optional
+
+from providers.base import SmsProvider, SmsProviderError
+from providers.factory import get_sms_provider
+
+logger = logging.getLogger("services.sms")
+
+_PHONE_RE = re.compile(r"^\d{10,13}$")
+
+
+class NumSpyService:
+    """Facade kept for compatibility with the historical module name.
+
+    Uses a pluggable SmsProvider. Does not accept client-posted passwords.
+    Does not share authenticated HTTP sessions across requests.
+    """
+
+    def __init__(self, provider: Optional[SmsProvider] = None) -> None:
+        self._provider = provider
+
+    @property
+    def provider(self) -> SmsProvider:
+        if self._provider is None:
+            self._provider = get_sms_provider()
+        return self._provider
+
+    async def validate_phone_number(self, phone_number: str) -> Dict[str, Any]:
+        phone = str(phone_number or "").strip()
+        if not phone:
+            return {"valid": False, "reason": "empty"}
+        if not _PHONE_RE.fullmatch(phone):
+            if not phone.isdigit():
+                return {"valid": False, "reason": "non_numeric"}
+            if len(phone) < 10:
+                return {"valid": False, "reason": "too_short"}
+            if len(phone) > 13:
+                return {"valid": False, "reason": "too_long"}
+            return {"valid": False, "reason": "invalid_format"}
+        return {"valid": True, "length": len(phone)}
+
+    async def send_sms(self, mobile_number: str, message: str) -> Dict[str, Any]:
+        return await self.provider.send(mobile_number, message)
+
+    async def schedule_sms(
+        self,
+        mobile_number: str,
+        message: str,
+        date: str,
+        time: str,
+    ) -> Dict[str, Any]:
+        return await self.provider.schedule(mobile_number, message, date, time)
+
+    async def get_mobile_details(self, mobile_number: str) -> Dict[str, Any]:
+        return await self.provider.get_mobile_details(mobile_number)
+
+
+# Re-export for tests / callers
+__all__ = ["NumSpyService", "SmsProviderError"]
