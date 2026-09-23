@@ -1,19 +1,25 @@
-openai>=1.3.0
-anthropic>=0.7.0
+# Web
+fastapi>=0.115.0
+uvicorn>=0.30.0
+python-multipart>=0.0.9
+starlette>=0.40.0
+
+# Validation / settings
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+
+# HTTP / parsing (Way2sms scraper — prefer Twilio for production)
+requests>=2.32.0
+beautifulsoup4>=4.12.0
+aiohttp>=3.10.0
+
+# Auth helper (correct package name; the old 'jwt' PyPI package is unrelated/abandoned)
+PyJWT>=2.8.0
+
+# Utilities
 python-dotenv>=1.0.0
-fastapi>=0.104.0
-uvicorn>=0.24.0
-aiohttp>=3.9.0
-pydantic>=2.0.0
-sqlalchemy>=2.0.0
-alembic>=1.13.0
-redis>=5.0.0
-jwt>=1.3.0
-python-multipart>=0.0.6
-pydantic-settings>=2.0.0
-loguru>=0.7.0
 tenacity>=8.2.0
-aiofiles>=23.2.0
-beautifulsoup4>=4.11.0
-requests>=2.31.0
-huepy>=1.2.1
+
+# Dev / test
+pytest>=8.0.0
+httpx>=0.27.0
