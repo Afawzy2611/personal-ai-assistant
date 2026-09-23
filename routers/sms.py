@@ -1,1 +1,197 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks\nfrom pydantic import BaseModel, Field\nfrom typing import Optional, List\nfrom datetime import datetime\nfrom loguru import logger\nfrom services.numspy_service import NumSpyService\n\nrouter = APIRouter()\nnumspy_service = NumSpyService()\n\nclass SMSRequest(BaseModel):\n    \"\"\"SMS request model\"\"\"\n    recipient: str = Field(..., description=\"Phone number to send SMS to\")\n    message: str = Field(..., description=\"SMS message content\")\n    username: Optional[str] = Field(None, description=\"Way2sms username\")\n    password: Optional[str] = Field(None, description=\"Way2sms password\")\n\nclass ScheduledSMSRequest(BaseModel):\n    \"\"\"Scheduled SMS request model\"\"\"\n    recipient: str = Field(..., description=\"Phone number to send SMS to\")\n    message: str = Field(..., description=\"SMS message content\")\n    date: str = Field(..., description=\"Schedule date in DD/MM/YYYY format\")\n    time: str = Field(..., description=\"Schedule time in HH:mm format (24-hour)\")\n    username: Optional[str] = Field(None, description=\"Way2sms username\")\n    password: Optional[str] = Field(None, description=\"Way2sms password\")\n\nclass MobileDetailsRequest(BaseModel):\n    \"\"\"Mobile number details request\"\"\"\n    mobile_number: str = Field(..., description=\"Phone number to get details for\")\n\nclass SMSResponse(BaseModel):\n    \"\"\"SMS response model\"\"\"\n    status: str\n    message: str\n    recipient: Optional[str] = None\n    timestamp: datetime = Field(default_factory=datetime.now)\n\nclass MobileDetailsResponse(BaseModel):\n    \"\"\"Mobile details response model\"\"\"\n    mobile_number: str\n    status: str\n    operator: Optional[str] = None\n    country: Optional[str] = None\n\n@router.post(\"/send\", response_model=SMSResponse)\nasync def send_sms(request: SMSRequest, background_tasks: BackgroundTasks):\n    \"\"\"\n    Send an SMS message to a phone number.\n    \n    Requires Way2sms account credentials.\n    \"\"\"\n    try:\n        # Validate phone number\n        validation = await numspy_service.validate_phone_number(request.recipient)\n        if not validation[\"valid\"]:\n            raise HTTPException(status_code=400, detail=f\"Invalid phone number: {validation['reason']}\")\n        \n        logger.info(f\"Processing SMS send request to {request.recipient}\")\n        \n        # Send SMS\n        result = await numspy_service.send_sms(\n            mobile_number=request.recipient,\n            message=request.message,\n            username=request.username,\n            password=request.password\n        )\n        \n        if result[\"status\"] == \"success\":\n            return SMSResponse(\n                status=\"success\",\n                message=\"SMS sent successfully\",\n                recipient=request.recipient\n            )\n        else:\n            raise HTTPException(status_code=500, detail=result.get(\"message\", \"Failed to send SMS\"))\n    except HTTPException:\n        raise\n    except Exception as e:\n        logger.error(f\"Error sending SMS: {str(e)}\")\n        raise HTTPException(status_code=500, detail=str(e))\n\n@router.post(\"/schedule\", response_model=SMSResponse)\nasync def schedule_sms(request: ScheduledSMSRequest, background_tasks: BackgroundTasks):\n    \"\"\"\n    Schedule an SMS to be sent at a future date/time.\n    \n    Date format: DD/MM/YYYY\n    Time format: HH:mm (24-hour format)\n    \"\"\"\n    try:\n        # Validate phone number\n        validation = await numspy_service.validate_phone_number(request.recipient)\n        if not validation[\"valid\"]:\n            raise HTTPException(status_code=400, detail=f\"Invalid phone number: {validation['reason']}\")\n        \n        # Validate date format\n        try:\n            datetime.strptime(request.date, \"%d/%m/%Y\")\n        except ValueError:\n            raise HTTPException(status_code=400, detail=\"Date must be in DD/MM/YYYY format\")\n        \n        # Validate time format\n        try:\n            datetime.strptime(request.time, \"%H:%M\")\n        except ValueError:\n            raise HTTPException(status_code=400, detail=\"Time must be in HH:mm format (24-hour)\")\n        \n        logger.info(f\"Processing scheduled SMS to {request.recipient} for {request.date} at {request.time}\")\n        \n        result = await numspy_service.schedule_sms(\n            mobile_number=request.recipient,\n            message=request.message,\n            date=request.date,\n            time=request.time,\n            username=request.username,\n            password=request.password\n        )\n        \n        if result[\"status\"] == \"success\":\n            return SMSResponse(\n                status=\"success\",\n                message=f\"SMS scheduled for {request.date} at {request.time}\",\n                recipient=request.recipient\n            )\n        else:\n            raise HTTPException(status_code=500, detail=result.get(\"message\", \"Failed to schedule SMS\"))\n    except HTTPException:\n        raise\n    except Exception as e:\n        logger.error(f\"Error scheduling SMS: {str(e)}\")\n        raise HTTPException(status_code=500, detail=str(e))\n\n@router.post(\"/details\", response_model=MobileDetailsResponse)\nasync def get_mobile_details(request: MobileDetailsRequest):\n    \"\"\"\n    Get details about a mobile number (operator, country, etc).\n    \n    This endpoint works without Way2sms authentication.\n    \"\"\"\n    try:\n        # Validate phone number\n        validation = await numspy_service.validate_phone_number(request.mobile_number)\n        if not validation[\"valid\"]:\n            raise HTTPException(status_code=400, detail=f\"Invalid phone number: {validation['reason']}\")\n        \n        logger.info(f\"Fetching details for mobile number {request.mobile_number}\")\n        \n        details = await numspy_service.get_mobile_details(request.mobile_number)\n        \n        return MobileDetailsResponse(\n            mobile_number=details[\"mobile_number\"],\n            status=details.get(\"status\", \"unknown\"),\n            operator=details.get(\"operator\"),\n            country=details.get(\"country\")\n        )\n    except HTTPException:\n        raise\n    except Exception as e:\n        logger.error(f\"Error fetching mobile details: {str(e)}\")\n        raise HTTPException(status_code=500, detail=str(e))\n\n@router.get(\"/validate/{phone_number}\")\nasync def validate_phone_number(phone_number: str):\n    \"\"\"\n    Validate a phone number format.\n    \"\"\"\n    try:\n        result = await numspy_service.validate_phone_number(phone_number)\n        return result\n    except Exception as e:\n        logger.error(f\"Error validating phone number: {str(e)}\")\n        raise HTTPException(status_code=500, detail=str(e))\n\n@router.get(\"/status\")\nasync def get_sms_status():\n    \"\"\"\n    Get SMS service status and information.\n    \"\"\"\n    try:\n        return {\n            \"service\": \"SMS via Way2sms\",\n            \"status\": \"active\",\n            \"features\": [\n                \"Send SMS\",\n                \"Schedule SMS\",\n                \"Get Mobile Details\",\n                \"Phone Number Validation\"\n            ],\n            \"supported_countries\": [\"India\"],\n            \"character_limit\": 160,\n            \"daily_limit\": 100\n        }\n    except Exception as e:\n        logger.error(f\"Error getting SMS status: {str(e)}\")\n        raise HTTPException(status_code=500, detail=str(e))\n"
+"""SMS API routes — authenticated, no client-posted credentials.
+
+Rewritten as a real Python module (prior revision was a single-line escaped blob).
+"""
+
+import logging
+from datetime import datetime
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from auth.api_key import require_api_key
+from auth.logging_utils import redact
+from auth.rate_limit import enforce_rate_limit
+from providers.base import SmsProviderError
+from services.numspy_service import NumSpyService
+
+logger = logging.getLogger("routers.sms")
+
+router = APIRouter(
+    prefix="/sms",
+    tags=["sms"],
+    dependencies=[Depends(require_api_key), Depends(enforce_rate_limit)],
+)
+
+_service = NumSpyService()
+
+
+class SMSRequest(BaseModel):
+    """Outbound SMS. Credentials are NEVER accepted from the client."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    recipient: str = Field(..., min_length=10, max_length=13, description="Digits only")
+    message: str = Field(..., min_length=1, max_length=160)
+
+    @field_validator("recipient")
+    @classmethod
+    def recipient_digits(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned.isdigit():
+            raise ValueError("recipient must be digits only")
+        return cleaned
+
+
+class ScheduledSMSRequest(SMSRequest):
+    date: str = Field(..., description="DD/MM/YYYY")
+    time: str = Field(..., description="HH:MM 24-hour")
+
+
+class MobileDetailsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mobile_number: str = Field(..., min_length=10, max_length=13)
+
+    @field_validator("mobile_number")
+    @classmethod
+    def digits_only(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned.isdigit():
+            raise ValueError("mobile_number must be digits only")
+        return cleaned
+
+
+class SMSResponse(BaseModel):
+    status: str
+    message: str
+    recipient: Optional[str] = None
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+
+class MobileDetailsResponse(BaseModel):
+    mobile_number: str
+    status: str
+    operator: Optional[str] = None
+    country: Optional[str] = None
+
+
+def _map_provider_error(exc: SmsProviderError) -> HTTPException:
+    if exc.code in {"auth_failed", "misconfigured"}:
+        code = status.HTTP_502_BAD_GATEWAY if exc.code == "auth_failed" else status.HTTP_503_SERVICE_UNAVAILABLE
+    elif exc.code == "insecure_transport":
+        code = status.HTTP_503_SERVICE_UNAVAILABLE
+    elif exc.code == "provider_unavailable":
+        code = status.HTTP_501_NOT_IMPLEMENTED
+    else:
+        code = status.HTTP_502_BAD_GATEWAY
+    # Generic client-facing detail; log redacted server-side separately
+    return HTTPException(status_code=code, detail="SMS operation failed")
+
+
+@router.post("/send", response_model=SMSResponse)
+async def send_sms(payload: SMSRequest) -> SMSResponse:
+    validation = await _service.validate_phone_number(payload.recipient)
+    if not validation.get("valid"):
+        raise HTTPException(status_code=400, detail="Invalid phone number")
+
+    try:
+        result = await _service.send_sms(payload.recipient, payload.message)
+    except SmsProviderError as exc:
+        logger.error("send failed: %s", redact(str(exc)))
+        raise _map_provider_error(exc) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.error("send unexpected error: %s", redact(str(exc)))
+        raise HTTPException(status_code=500, detail="SMS operation failed") from exc
+
+    return SMSResponse(
+        status=result.get("status", "success"),
+        message=result.get("message", "SMS sent successfully"),
+        recipient=payload.recipient,
+    )
+
+
+@router.post("/schedule", response_model=SMSResponse)
+async def schedule_sms(payload: ScheduledSMSRequest) -> SMSResponse:
+    validation = await _service.validate_phone_number(payload.recipient)
+    if not validation.get("valid"):
+        raise HTTPException(status_code=400, detail="Invalid phone number")
+
+    try:
+        datetime.strptime(payload.date, "%d/%m/%Y")
+        datetime.strptime(payload.time, "%H:%M")
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid date/time format (expected DD/MM/YYYY and HH:MM)",
+        ) from None
+
+    try:
+        result = await _service.schedule_sms(
+            payload.recipient,
+            payload.message,
+            payload.date,
+            payload.time,
+        )
+    except SmsProviderError as exc:
+        logger.error("schedule failed: %s", redact(str(exc)))
+        raise _map_provider_error(exc) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.error("schedule unexpected error: %s", redact(str(exc)))
+        raise HTTPException(status_code=500, detail="SMS operation failed") from exc
+
+    return SMSResponse(
+        status=result.get("status", "success"),
+        message=result.get("message", "SMS scheduled successfully"),
+        recipient=payload.recipient,
+    )
+
+
+@router.post("/details", response_model=MobileDetailsResponse)
+async def get_mobile_details(payload: MobileDetailsRequest) -> MobileDetailsResponse:
+    validation = await _service.validate_phone_number(payload.mobile_number)
+    if not validation.get("valid"):
+        raise HTTPException(status_code=400, detail="Invalid phone number")
+
+    try:
+        details = await _service.get_mobile_details(payload.mobile_number)
+    except SmsProviderError as exc:
+        logger.error("details failed: %s", redact(str(exc)))
+        raise _map_provider_error(exc) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.error("details unexpected error: %s", redact(str(exc)))
+        raise HTTPException(status_code=500, detail="SMS operation failed") from exc
+
+    return MobileDetailsResponse(
+        mobile_number=details.get("mobile_number", payload.mobile_number),
+        status=details.get("status", "unknown"),
+        operator=details.get("operator"),
+        country=details.get("country"),
+    )
+
+
+@router.get("/validate/{phone_number}")
+async def validate_phone_number(phone_number: str) -> dict:
+    return await _service.validate_phone_number(phone_number)
+
+
+@router.get("/status")
+async def get_sms_status() -> dict:
+    return {
+        "service": "SMS API stub",
+        "status": "active",
+        "provider": "configurable (default: way2sms scraper — prefer Twilio for production)",
+        "features": [
+            "Send SMS",
+            "Schedule SMS",
+            "Get Mobile Details",
+            "Phone Number Validation",
+        ],
+        "character_limit": 160,
+        "auth": "API_KEY required (Bearer or X-API-Key)",
+        "note": (
+            "Way2sms is a legacy HTML scraper. Live production should use an "
+            "official HTTPS provider (e.g. Twilio) via SmsProvider."
+        ),
+    }
